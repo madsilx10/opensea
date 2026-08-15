@@ -11,12 +11,17 @@ const readline = require("readline");
 const axios = require("axios");
 const { ethers } = require("ethers");
 
-const COLLECTION_SLUG = "h00d--r00st"; // ganti sesuai collection target
-const COLLECTION_URI = `https://opensea.io/collection/${COLLECTION_SLUG}/overview`;
+const COLLECTION_SLUG_DEFAULT = "h00d--r00st";
+let COLLECTION_SLUG = COLLECTION_SLUG_DEFAULT;
+let COLLECTION_URI = `https://opensea.io/collection/${COLLECTION_SLUG}/overview`;
 const PERSISTED_HASH = "e1b54354df0d26d39c6b81429bd5e5d37749eaa4bdc027f987128f8c1e7d2308";
 const DOMAIN = "opensea.io";
 const CHAIN_ID = 1;
 const CONNECTOR_ID = "io.metamask";
+
+const GREEN = "\x1b[32m";
+const RED = "\x1b[31m";
+const RESET = "\x1b[0m";
 
 const HEADERS = {
   "content-type": "application/json",
@@ -45,6 +50,21 @@ function loadWallets() {
 function ask(question) {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   return new Promise((resolve) => rl.question(question, (ans) => { rl.close(); resolve(ans.trim()); }));
+}
+
+function parseSlugFromInput(input) {
+  // terima full URL (opensea.io/collection/slug/...) atau slug polos
+  const match = input.match(/collection\/([^/?#]+)/);
+  return match ? match[1] : input;
+}
+
+async function selectCollection() {
+  const input = await ask(`Link/slug collection (kosongin buat default "${COLLECTION_SLUG_DEFAULT}"): `);
+  if (input) {
+    COLLECTION_SLUG = parseSlugFromInput(input);
+    COLLECTION_URI = `https://opensea.io/collection/${COLLECTION_SLUG}/overview`;
+  }
+  console.log(`[*] Collection slug: ${COLLECTION_SLUG}`);
 }
 
 async function selectWallets(wallets) {
@@ -198,24 +218,27 @@ async function checkEligibility(address, cookieJar) {
 
 async function main() {
   const allWallets = loadWallets();
+  await selectCollection();
   const selected = await selectWallets(allWallets);
   const results = [];
 
-  for (const { address, privateKey } of selected) {
+  for (let i = 0; i < selected.length; i++) {
+    const { address, privateKey } = selected[i];
     try {
-      console.log(`\n[*] login ${address} ...`);
+      console.log(`\n[${i + 1}/${selected.length}] login ${address} ...`);
       const { cookieJar } = await loginWallet({ address, privateKey });
-      console.log(`[*] cek eligibility ${address} ...`);
+      console.log(`[${i + 1}/${selected.length}] cek eligibility ${address} ...`);
       const stages = await checkEligibility(address, cookieJar);
       console.log(`    Hasil stage untuk ${address}:`);
       for (const s of stages) {
-        console.log(`      - ${s.stage} (stageIndex ${s.stageIndex}): ${s.isEligible ? "ELIGIBLE" : "NOT ELIGIBLE"} | limit ${s.limitPerWallet} | $${s.priceUsd}`);
+        const statusText = s.isEligible ? `${GREEN}ELIGIBLE${RESET}` : `${RED}NOT ELIGIBLE${RESET}`;
+        console.log(`      - ${s.stage} (stageIndex ${s.stageIndex}): ${statusText} | limit ${s.limitPerWallet} | $${s.priceUsd}`);
       }
       const eligibleStages = stages.filter((s) => s.isEligible).map((s) => s.stage);
       console.log(
         eligibleStages.length
-          ? `[+] ${address} ELIGIBLE di: ${eligibleStages.join(", ")}`
-          : `[-] ${address} NOT ELIGIBLE di stage manapun`
+          ? `[+] ${address} ${GREEN}ELIGIBLE${RESET} di: ${eligibleStages.join(", ")}`
+          : `[-] ${address} ${RED}NOT ELIGIBLE${RESET} di stage manapun`
       );
       results.push({ address, success: true, stages });
     } catch (e) {
