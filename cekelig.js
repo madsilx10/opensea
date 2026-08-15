@@ -157,6 +157,9 @@ async function checkEligibility(address, cookieJar) {
   if (res.data.errors) throw new Error(`GraphQL error: ${JSON.stringify(res.data.errors)}`);
 
   const stages = res.data.data?.dropBySlug?.stages || [];
+  if (stages.length === 0) {
+    console.log(`    [debug] raw response: ${JSON.stringify(res.data)}`);
+  }
   return stages.map((s) => ({
     stage: s.stageType,
     stageIndex: s.stageIndex,
@@ -177,6 +180,10 @@ async function main() {
       const { cookieJar } = await loginWallet({ address, privateKey });
       console.log(`[*] cek eligibility ${address} ...`);
       const stages = await checkEligibility(address, cookieJar);
+      console.log(`    Hasil stage untuk ${address}:`);
+      for (const s of stages) {
+        console.log(`      - ${s.stage} (stageIndex ${s.stageIndex}): ${s.isEligible ? "ELIGIBLE" : "NOT ELIGIBLE"} | limit ${s.limitPerWallet} | $${s.priceUsd}`);
+      }
       const eligibleStages = stages.filter((s) => s.isEligible).map((s) => s.stage);
       console.log(
         eligibleStages.length
