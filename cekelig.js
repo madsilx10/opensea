@@ -161,6 +161,12 @@ async function loginWallet({ address, privateKey }) {
   const accessToken = extractCookie(verifyRes.headers["set-cookie"] || [], "access_token");
   if (!accessToken) throw new Error("access_token tidak ditemukan di response");
 
+  // tambahin hint cookies yang biasanya ke-set browser tapi gak ada di response header verify
+  cookieJar = mergeCookies(cookieJar, [
+    `connected-account-server-hint=${checksumAddr.toLowerCase()}`,
+    `auth_access_hint=true`,
+  ]);
+
   return { accessToken, cookieJar };
 }
 
