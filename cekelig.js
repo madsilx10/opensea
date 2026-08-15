@@ -1,17 +1,26 @@
 /**
  * cekelig.js — OpenSea Drop Eligibility Checker
+ * Flow per wallet: SIWE login (nonce -> sign -> verify) -> pakai access_token -> DropEligibilityQuery
+ *
  * Input: wallet.txt (1 privkey per baris)
  * Output: eligibility_results.json
  */
 
 const fs = require("fs");
+const readline = require("readline");
 const axios = require("axios");
 const { ethers } = require("ethers");
+const { SiweMessage } = require("siwe");
 
 const COLLECTION_SLUG = "h00d--r00st"; // ganti sesuai collection target
+const COLLECTION_URI = `https://opensea.io/collection/${COLLECTION_SLUG}/overview`;
 const PERSISTED_HASH = "e1b54354df0d26d39c6b81429bd5e5d37749eaa4bdc027f987128f8c1e7d2308";
+const DOMAIN = "opensea.io";
+const CHAIN_ID = 1;
+const CONNECTOR_ID = "io.metamask";
 
 const HEADERS = {
+  "content-type": "application/json",
   accept: "application/graphql-response+json, application/graphql+json, application/json, text/event-stream, multipart/mixed",
   "accept-language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
   origin: "https://opensea.io",
@@ -34,7 +43,104 @@ function loadWallets() {
   });
 }
 
-async function checkEligibility(address) {
+function ask(question) {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => rl.question(question, (ans) => { rl.close(); resolve(ans.trim()); }));
+}
+
+async function selectWallets(wallets) {
+  console.log(`\nTotal wallet di wallet.txt: ${wallets.length}`);
+  console.log("Pilih mode:");
+  console.log("  1) 1 akun");
+  console.log("  2) semua");
+  console.log("  3) from x to end");
+  const mode = await ask("Pilihan (1/2/3): ");
+
+  if (mode === "1") {
+    const idx = parseInt(await ask(`Nomor akun (1-${wallets.length}): `), 10);
+    if (!idx || idx < 1 || idx > wallets.length) throw new Error("Nomor akun invalid");
+    return [wallets[idx - 1]];
+  }
+
+  if (mode === "2") {
+    return wallets;
+  }
+
+  if (mode === "3") {
+    const from = parseInt(await ask(`Mulai dari nomor (1-${wallets.length}): `), 10);
+    if (!from || from < 1 || from > wallets.length) throw new Error("Nomor invalid");
+    return wallets.slice(from - 1);
+  }
+
+  throw new Error("Pilihan tidak valid");
+}
+
+function extractCookie(setCookieArr, name) {
+  if (!setCookieArr) return null;
+  for (const c of setCookieArr) {
+    const match = c.match(new RegExp(`${name}=([^;]+)`));
+    if (match) return match[1];
+  }
+  return null;
+}
+
+async function loginWallet({ address, privateKey }) {
+  const wallet = new ethers.Wallet(privateKey);
+
+  const nonceRes = await axios.post(
+    "https://opensea.io/__api/auth/siwe/nonce",
+    {},
+    { headers: HEADERS, validateStatus: () => true }
+  );
+  if (nonceRes.status !== 200) throw new Error(`nonce failed: ${nonceRes.status}`);
+  const nonce = nonceRes.data.nonce;
+  const nonceCookies = (nonceRes.headers["set-cookie"] || []).map((c) => c.split(";")[0]).join("; ");
+
+  const siwe = new SiweMessage({
+    domain: DOMAIN,
+    address: ethers.getAddress(address),
+    statement: `Click to sign in and accept the OpenSea Terms of Service (https://opensea.io/tos) and Privacy Policy (https://opensea.io/privacy)`,
+    uri: COLLECTION_URI,
+    version: "1",
+    chainId: CHAIN_ID,
+    nonce,
+    issuedAt: new Date().toISOString(),
+  });
+
+  const signature = await wallet.signMessage(siwe.prepareMessage());
+
+  const body = {
+    message: {
+      accountType: "Ethereum",
+      address: ethers.getAddress(address),
+      chainId: String(CHAIN_ID),
+      domain: DOMAIN,
+      issuedAt: siwe.issuedAt,
+      nonce,
+      statement: siwe.statement,
+      uri: COLLECTION_URI,
+      version: "1",
+    },
+    chainArch: "EVM",
+    connectorId: CONNECTOR_ID,
+    signature,
+  };
+
+  const verifyRes = await axios.post("https://opensea.io/__api/auth/siwe/verify", body, {
+    headers: { ...HEADERS, cookie: nonceCookies },
+    validateStatus: () => true,
+  });
+  if (verifyRes.status !== 200) throw new Error(`verify failed: ${verifyRes.status} ${JSON.stringify(verifyRes.data)}`);
+
+  const setCookie = verifyRes.headers["set-cookie"] || [];
+  const accessToken = extractCookie(setCookie, "access_token");
+  if (!accessToken) throw new Error("access_token tidak ditemukan di response");
+
+  const fullCookieJar = [nonceCookies, ...setCookie.map((c) => c.split(";")[0])].filter(Boolean).join("; ");
+  return { accessToken, cookieJar: fullCookieJar };
+}
+
+async function checkEligibility(address, cookieJar) {
   const variables = JSON.stringify({ address, collectionSlug: COLLECTION_SLUG });
   const extensions = JSON.stringify({ persistedQuery: { sha256Hash: PERSISTED_HASH, version: 1 } });
 
@@ -42,14 +148,10 @@ async function checkEligibility(address) {
     variables
   )}&extensions=${encodeURIComponent(extensions)}`;
 
-  const res = await axios.get(url, { headers: HEADERS, validateStatus: () => true });
+  const res = await axios.get(url, { headers: { ...HEADERS, cookie: cookieJar }, validateStatus: () => true });
 
-  if (res.status !== 200) {
-    throw new Error(`HTTP ${res.status}: ${JSON.stringify(res.data)}`);
-  }
-  if (res.data.errors) {
-    throw new Error(`GraphQL error: ${JSON.stringify(res.data.errors)}`);
-  }
+  if (res.status !== 200) throw new Error(`HTTP ${res.status}: ${JSON.stringify(res.data)}`);
+  if (res.data.errors) throw new Error(`GraphQL error: ${JSON.stringify(res.data.errors)}`);
 
   const stages = res.data.data?.dropBySlug?.stages || [];
   return stages.map((s) => ({
@@ -62,13 +164,16 @@ async function checkEligibility(address) {
 }
 
 async function main() {
-  const wallets = loadWallets();
+  const allWallets = loadWallets();
+  const selected = await selectWallets(allWallets);
   const results = [];
 
-  for (const { address } of wallets) {
+  for (const { address, privateKey } of selected) {
     try {
-      console.log(`[*] cek ${address} ...`);
-      const stages = await checkEligibility(address);
+      console.log(`\n[*] login ${address} ...`);
+      const { cookieJar } = await loginWallet({ address, privateKey });
+      console.log(`[*] cek eligibility ${address} ...`);
+      const stages = await checkEligibility(address, cookieJar);
       const eligibleStages = stages.filter((s) => s.isEligible).map((s) => s.stage);
       console.log(
         eligibleStages.length
@@ -80,11 +185,12 @@ async function main() {
       console.log(`[-] ${address} FAILED: ${e.message}`);
       results.push({ address, success: false, error: e.message });
     }
-    await new Promise((r) => setTimeout(r, 800));
+    await new Promise((r) => setTimeout(r, 1500));
   }
 
   fs.writeFileSync("./eligibility_results.json", JSON.stringify(results, null, 2));
-  console.log(`\nDone. Saved to eligibility_results.json`);
+  console.log(`\nDone. ${results.filter((r) => r.success).length}/${selected.length} berhasil dicek.`);
+  console.log("Saved to eligibility_results.json");
 }
 
 main();
