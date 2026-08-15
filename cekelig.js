@@ -96,7 +96,7 @@ async function loginWallet({ address, privateKey }) {
   const nonceCookies = (nonceRes.headers["set-cookie"] || []).map((c) => c.split(";")[0]).join("; ");
 
   const checksumAddr = ethers.getAddress(address);
-  const statement = `Click to sign in and accept the OpenSea Terms of Service (https://opensea.io/tos) and Privacy Policy (https://opensea.io/privacy)`;
+  const statement = `Click to sign in and accept the OpenSea Terms of Service (https://opensea.io/tos) and Privacy Policy (https://opensea.io/privacy).`;
   const issuedAt = new Date().toISOString();
 
   // EIP-4361 message, format manual (ganti dependency siwe)
