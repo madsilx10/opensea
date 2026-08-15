@@ -10,7 +10,6 @@ const fs = require("fs");
 const readline = require("readline");
 const axios = require("axios");
 const { ethers } = require("ethers");
-const { SiweMessage } = require("siwe");
 
 const COLLECTION_SLUG = "h00d--r00st"; // ganti sesuai collection target
 const COLLECTION_URI = `https://opensea.io/collection/${COLLECTION_SLUG}/overview`;
@@ -96,28 +95,32 @@ async function loginWallet({ address, privateKey }) {
   const nonce = nonceRes.data.nonce;
   const nonceCookies = (nonceRes.headers["set-cookie"] || []).map((c) => c.split(";")[0]).join("; ");
 
-  const siwe = new SiweMessage({
-    domain: DOMAIN,
-    address: ethers.getAddress(address),
-    statement: `Click to sign in and accept the OpenSea Terms of Service (https://opensea.io/tos) and Privacy Policy (https://opensea.io/privacy)`,
-    uri: COLLECTION_URI,
-    version: "1",
-    chainId: CHAIN_ID,
-    nonce,
-    issuedAt: new Date().toISOString(),
-  });
+  const checksumAddr = ethers.getAddress(address);
+  const statement = `Click to sign in and accept the OpenSea Terms of Service (https://opensea.io/tos) and Privacy Policy (https://opensea.io/privacy)`;
+  const issuedAt = new Date().toISOString();
 
-  const signature = await wallet.signMessage(siwe.prepareMessage());
+  // EIP-4361 message, format manual (ganti dependency siwe)
+  const messageStr =
+    `${DOMAIN} wants you to sign in with your Ethereum account:\n` +
+    `${checksumAddr}\n\n` +
+    `${statement}\n\n` +
+    `URI: ${COLLECTION_URI}\n` +
+    `Version: 1\n` +
+    `Chain ID: ${CHAIN_ID}\n` +
+    `Nonce: ${nonce}\n` +
+    `Issued At: ${issuedAt}`;
+
+  const signature = await wallet.signMessage(messageStr);
 
   const body = {
     message: {
       accountType: "Ethereum",
-      address: ethers.getAddress(address),
+      address: checksumAddr,
       chainId: String(CHAIN_ID),
       domain: DOMAIN,
-      issuedAt: siwe.issuedAt,
+      issuedAt,
       nonce,
-      statement: siwe.statement,
+      statement,
       uri: COLLECTION_URI,
       version: "1",
     },
