@@ -83,17 +83,39 @@ function extractCookie(setCookieArr, name) {
   return null;
 }
 
+function mergeCookies(existingJar, setCookieArr) {
+  const newParts = (setCookieArr || []).map((c) => c.split(";")[0]);
+  const existingMap = {};
+  for (const part of (existingJar ? existingJar.split("; ") : [])) {
+    const [k] = part.split("=");
+    if (k) existingMap[k] = part;
+  }
+  for (const part of newParts) {
+    const [k] = part.split("=");
+    if (k) existingMap[k] = part; // overwrite kalau sama key (misal cookie di-refresh)
+  }
+  return Object.values(existingMap).join("; ");
+}
+
 async function loginWallet({ address, privateKey }) {
   const wallet = new ethers.Wallet(privateKey);
+
+  // step 0: buka halaman collection dulu buat ambil cookie awal (cf_bm, os2AccessEx, dll)
+  let cookieJar = "";
+  const pageRes = await axios.get(COLLECTION_URI, {
+    headers: { ...HEADERS, accept: "text/html,application/xhtml+xml", cookie: "" },
+    validateStatus: () => true,
+  });
+  cookieJar = mergeCookies(cookieJar, pageRes.headers["set-cookie"]);
 
   const nonceRes = await axios.post(
     "https://opensea.io/__api/auth/siwe/nonce",
     {},
-    { headers: HEADERS, validateStatus: () => true }
+    { headers: { ...HEADERS, cookie: cookieJar }, validateStatus: () => true }
   );
   if (nonceRes.status !== 200) throw new Error(`nonce failed: ${nonceRes.status}`);
   const nonce = nonceRes.data.nonce;
-  const nonceCookies = (nonceRes.headers["set-cookie"] || []).map((c) => c.split(";")[0]).join("; ");
+  cookieJar = mergeCookies(cookieJar, nonceRes.headers["set-cookie"]);
 
   const checksumAddr = ethers.getAddress(address);
   const statement = `Click to sign in and accept the OpenSea Terms of Service (https://opensea.io/tos) and Privacy Policy (https://opensea.io/privacy).`;
@@ -130,17 +152,16 @@ async function loginWallet({ address, privateKey }) {
   };
 
   const verifyRes = await axios.post("https://opensea.io/__api/auth/siwe/verify", body, {
-    headers: { ...HEADERS, cookie: nonceCookies },
+    headers: { ...HEADERS, cookie: cookieJar },
     validateStatus: () => true,
   });
   if (verifyRes.status !== 200) throw new Error(`verify failed: ${verifyRes.status} ${JSON.stringify(verifyRes.data)}`);
 
-  const setCookie = verifyRes.headers["set-cookie"] || [];
-  const accessToken = extractCookie(setCookie, "access_token");
+  cookieJar = mergeCookies(cookieJar, verifyRes.headers["set-cookie"]);
+  const accessToken = extractCookie(verifyRes.headers["set-cookie"] || [], "access_token");
   if (!accessToken) throw new Error("access_token tidak ditemukan di response");
 
-  const fullCookieJar = [nonceCookies, ...setCookie.map((c) => c.split(";")[0])].filter(Boolean).join("; ");
-  return { accessToken, cookieJar: fullCookieJar };
+  return { accessToken, cookieJar };
 }
 
 async function checkEligibility(address, cookieJar) {
@@ -198,9 +219,7 @@ async function main() {
     await new Promise((r) => setTimeout(r, 1500));
   }
 
-  fs.writeFileSync("./eligibility_results.json", JSON.stringify(results, null, 2));
   console.log(`\nDone. ${results.filter((r) => r.success).length}/${selected.length} berhasil dicek.`);
-  console.log("Saved to eligibility_results.json");
 }
 
 main();
