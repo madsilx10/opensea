@@ -11,9 +11,9 @@ const readline = require("readline");
 const axios = require("axios");
 const { ethers } = require("ethers");
 
-const COLLECTION_SLUG_DEFAULT = "h00d--r00st";
-let COLLECTION_SLUG = COLLECTION_SLUG_DEFAULT;
-let COLLECTION_URI = `https://opensea.io/collection/${COLLECTION_SLUG}/overview`;
+const MINT_MODULE_HASH = "98b96c9357f51630dc14c3bcab0de47684337a0aa726277b82820d6ee354217d";
+let COLLECTION_SLUG = "";
+let COLLECTION_URI = "";
 const PERSISTED_HASH = "e1b54354df0d26d39c6b81429bd5e5d37749eaa4bdc027f987128f8c1e7d2308";
 const DOMAIN = "opensea.io";
 const CHAIN_ID = 1;
@@ -59,12 +59,31 @@ function parseSlugFromInput(input) {
 }
 
 async function selectCollection() {
-  const input = await ask(`Link/slug collection (kosongin buat default "${COLLECTION_SLUG_DEFAULT}"): `);
-  if (input) {
-    COLLECTION_SLUG = parseSlugFromInput(input);
-    COLLECTION_URI = `https://opensea.io/collection/${COLLECTION_SLUG}/overview`;
+  let input = "";
+  while (!input) {
+    input = await ask(`Link/slug collection: `);
   }
+  COLLECTION_SLUG = parseSlugFromInput(input);
+  COLLECTION_URI = `https://opensea.io/collection/${COLLECTION_SLUG}/overview`;
   console.log(`[*] Collection slug: ${COLLECTION_SLUG}`);
+}
+
+async function getStageLabels() {
+  const variables = JSON.stringify({ collectionSlug: COLLECTION_SLUG });
+  const extensions = JSON.stringify({ persistedQuery: { sha256Hash: MINT_MODULE_HASH, version: 1 } });
+  const url = `https://gql.opensea.io/graphql?app_id=os2-web&operationName=MintModuleQuery&variables=${encodeURIComponent(
+    variables
+  )}&extensions=${encodeURIComponent(extensions)}`;
+
+  try {
+    const res = await axios.get(url, { headers: HEADERS, validateStatus: () => true });
+    const stages = res.data?.data?.dropBySlug?.stages || [];
+    const map = {};
+    for (const s of stages) map[s.stageIndex] = s.label;
+    return map;
+  } catch {
+    return {};
+  }
 }
 
 async function selectWallets(wallets) {
@@ -190,7 +209,7 @@ async function loginWallet({ address, privateKey }) {
   return { accessToken, cookieJar };
 }
 
-async function checkEligibility(address, cookieJar) {
+async function checkEligibility(address, cookieJar, stageLabels) {
   const variables = JSON.stringify({ address, collectionSlug: COLLECTION_SLUG });
   const extensions = JSON.stringify({ persistedQuery: { sha256Hash: PERSISTED_HASH, version: 1 } });
 
@@ -208,7 +227,7 @@ async function checkEligibility(address, cookieJar) {
     console.log(`    [debug] raw response: ${JSON.stringify(res.data)}`);
   }
   return stages.map((s) => ({
-    stage: s.stageType,
+    stage: stageLabels[s.stageIndex] || s.stageType,
     stageIndex: s.stageIndex,
     isEligible: s.isEligible,
     limitPerWallet: s.eligibleMaxTotalMintableByWallet,
@@ -219,6 +238,7 @@ async function checkEligibility(address, cookieJar) {
 async function main() {
   const allWallets = loadWallets();
   await selectCollection();
+  const stageLabels = await getStageLabels();
   const selected = await selectWallets(allWallets);
   const results = [];
 
@@ -228,7 +248,7 @@ async function main() {
       console.log(`\n[${i + 1}/${selected.length}] login ${address} ...`);
       const { cookieJar } = await loginWallet({ address, privateKey });
       console.log(`[${i + 1}/${selected.length}] cek eligibility ${address} ...`);
-      const stages = await checkEligibility(address, cookieJar);
+      const stages = await checkEligibility(address, cookieJar, stageLabels);
       console.log(`    Hasil stage untuk ${address}:`);
       for (const s of stages) {
         const statusText = s.isEligible ? `${GREEN}ELIGIBLE${RESET}` : `${RED}NOT ELIGIBLE${RESET}`;
