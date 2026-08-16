@@ -200,32 +200,38 @@ async function selectCollection() {
   COLLECTION_URI  = `https://opensea.io/collection/${COLLECTION_SLUG}/overview`;
   console.log(`[*] Collection: ${COLLECTION_SLUG}`);
 
-  // Detect chain otomatis
-  process.stdout.write(`[*] Detect chain... `);
-  try {
-    CHAIN_NAME = await detectChain();
-    const rpcInfo = getRpcForChain(CHAIN_NAME);
-    if (!rpcInfo) {
-      // Chain diketahui tapi belum ada di map — minta manual
-      console.log(`${YELLOW}chain "${CHAIN_NAME}" belum ada di config${RESET}`);
-      const manualRpc = await ask(`RPC URL untuk chain "${CHAIN_NAME}": `);
-      RPC_URL  = manualRpc;
-      CHAIN_ID = parseInt(await ask(`Chain ID untuk "${CHAIN_NAME}": `), 10) || 1;
+  // Pilih chain manual — simpel dan pasti jalan
+  console.log("\nChain:");
+  const chainList = Object.entries(CHAIN_MAP).filter(([k]) => !k.includes("-")); // skip alias
+  chainList.forEach(([name, info], i) => {
+    const hasRpc = !!process.env[info.envKey];
+    const mark   = hasRpc ? GREEN + "✓" + RESET : YELLOW + "~" + RESET; // ✓ = ada di .env, ~ = pakai public RPC
+    console.log(`  ${i + 1}) ${mark} ${name}`);
+  });
+
+  const pick = await ask(`Pilih chain (1-${chainList.length}): `);
+  const idx  = parseInt(pick, 10) - 1;
+  if (idx < 0 || idx >= chainList.length) throw new Error("Pilihan chain tidak valid");
+
+  const [selectedName, selectedInfo] = chainList[idx];
+  CHAIN_NAME = selectedName;
+  CHAIN_ID   = selectedInfo.chainId;
+
+  const fromEnv = process.env[selectedInfo.envKey];
+  if (fromEnv) {
+    RPC_URL = fromEnv;
+  } else {
+    const pub = PUBLIC_RPC[selectedName];
+    if (pub) {
+      RPC_URL = pub;
+      console.log(`${YELLOW}[!] ${selectedInfo.envKey}= tidak ada di .env, pakai public RPC${RESET}`);
     } else {
-      RPC_URL  = rpcInfo.rpc;
-      CHAIN_ID = rpcInfo.chainId;
-      console.log(`${GREEN}${CHAIN_NAME} (chainId: ${CHAIN_ID})${RESET}`);
+      RPC_URL = await ask(`RPC URL untuk ${selectedName}: `);
     }
-  } catch (e) {
-    console.log(`${YELLOW}gagal (${e.message})${RESET}`);
-    const manualRpc = await ask(`Input RPC URL manual: `);
-    const manualId  = await ask(`Chain ID manual (misal 1=ETH, 8453=Base): `);
-    RPC_URL  = manualRpc;
-    CHAIN_ID = parseInt(manualId, 10) || 1;
-    CHAIN_NAME = "unknown";
   }
 
-  console.log(`[*] RPC: ${RPC_URL.slice(0, 50)}...`);
+  console.log(`[*] Chain: ${CHAIN_NAME} (chainId: ${CHAIN_ID})`);
+  console.log(`[*] RPC  : ${RPC_URL.slice(0, 60)}...`);
 }
 
 async function selectWallets(wallets) {
