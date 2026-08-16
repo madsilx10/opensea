@@ -19,8 +19,20 @@
  * Run    : node mint.js
  */
 
-require("dotenv").config();
 const fs = require("fs");
+
+// Baca .env manual tanpa dotenv
+if (fs.existsSync("./.env")) {
+  for (const line of fs.readFileSync("./.env", "utf8").split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const idx = trimmed.indexOf("=");
+    if (idx === -1) continue;
+    const key = trimmed.slice(0, idx).trim();
+    const val = trimmed.slice(idx + 1).trim();
+    if (key && !process.env[key]) process.env[key] = val;
+  }
+}
 const readline = require("readline");
 const axios = require("axios");
 const { ethers } = require("ethers");
