@@ -1,6 +1,6 @@
 const fs = require('fs');
 
-const WALLET_FILE = 'wallet.txt';
+const WALLET_FILE = 'address.txt';
 const OUTPUT_FILE = 'result.txt';
 const DELAY_MS = 1000; // jeda antar request, naikin kalau kena rate limit
 
